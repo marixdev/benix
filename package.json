@@ -1,0 +1,24 @@
+{
+  "name": "benix-cli",
+  "version": "1.0.0",
+  "description": "Benix VPS Benchmark CLI - One Command. Full Insights.",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "benix": "./dist/benix"
+  },
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build src/index.ts --compile --outfile dist/benix --target bun-linux-x64",
+    "build:all": "bun run build:linux && bun run build:mac",
+    "build:linux": "bun build src/index.ts --compile --outfile dist/benix-linux-x64 --target bun-linux-x64",
+    "build:mac": "bun build src/index.ts --compile --outfile dist/benix-darwin-x64 --target bun-darwin-x64"
+  },
+  "keywords": ["vps", "benchmark", "server", "performance", "speedtest"],
+  "author": "Benix",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.0.0"
+  }
+}
