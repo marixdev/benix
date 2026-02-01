@@ -1,0 +1,122 @@
+name: Build and Release CLI
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 1.0.0)'
+        required: true
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: x64
+            bun_target: bun-linux-x64
+            outfile: benix
+          - target: arm64
+            bun_target: bun-linux-arm64
+            outfile: benix-arm
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Update version in code
+        run: |
+          sed -i "s/const VERSION = .*/const VERSION = '${{ github.event.inputs.version }}';/" src/index.ts
+
+      - name: Build for ${{ matrix.target }}
+        run: bun build src/index.ts --compile --target=${{ matrix.bun_target }} --outfile=${{ matrix.outfile }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.outfile }}
+          path: ${{ matrix.outfile }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ github.event.inputs.version }}" -m "Release ${{ github.event.inputs.version }}"
+          git push origin "${{ github.event.inputs.version }}"
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          cp artifacts/benix/benix release/
+          cp artifacts/benix-arm/benix-arm release/
+          cd release && sha256sum * > checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.event.inputs.version }}
+          name: Benix ${{ github.event.inputs.version }}
+          body: |
+            ## Benix CLI ${{ github.event.inputs.version }}
+            
+            ### Downloads
+            - `benix` - Linux x64
+            - `benix-arm` - Linux ARM64
+            
+            ### Quick Install
+            ```bash
+            bash <(wget -qO- https://benix.app/install)
+            ```
+            
+            ### Checksums
+            See `checksums.txt` for SHA256 checksums.
+          files: |
+            release/benix
+            release/benix-arm
+            release/checksums.txt
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  notify:
+    needs: release
+    runs-on: ubuntu-latest
+    if: success()
+
+    steps:
+      - name: Summary
+        run: |
+          echo "## 🚀 Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ github.event.inputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Artifacts Published:" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ GitHub Release" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Download URL:" >> $GITHUB_STEP_SUMMARY
+          echo "- https://github.com/${{ github.repository }}/releases/tag/${{ github.event.inputs.version }}" >> $GITHUB_STEP_SUMMARY
