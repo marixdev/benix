@@ -31,7 +31,7 @@ export interface BenchmarkResult {
 
 const VERSION = '1.0.0';
 // Use local API for development, production API for release
-const BENIX_API = process.env.BENIX_API || 'http://localhost:3001';
+const BENIX_API = process.env.BENIX_API || 'https://api.benix.app';
 
 async function main() {
   const args = parseArgs();

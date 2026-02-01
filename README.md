@@ -185,7 +185,7 @@ No personal data is collected. Results can be deleted upon request.
 
 ## Related Projects
 
-- [Marix](https://github.com/nicepkg/marix) - Zero-Knowledge SSH Client with built-in Benix integration
+- [Marix](https://github.com/marixdev/marix) - Zero-Knowledge SSH Client with built-in Benix integration
 
 ## License
 
@@ -194,5 +194,5 @@ This project is licensed under the [GNU General Public License v3.0](LICENSE).
 ---
 
 <p align="center">
-  Made with ❤️ by <a href="https://benix.app">Benix Team</a>
+  Made with ❤️ by <a href="https://marix.dev">Marix SSH client</a>
 </p>
