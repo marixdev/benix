@@ -265,8 +265,8 @@ export async function runDiskBenchmark(skipFio: boolean = false): Promise<DiskRe
     result.sequentialRead = readSpeed > 0 ? formatSpeed(readSpeed) : 'N/A';
     clearProgress();
 
-    // Clean up test file
-    await exec(`rm -f ${testFile}`);
+    // Clean up dd test file
+    await exec(`rm -f ${testFile} 2>/dev/null || true`);
 
     // I/O Latency
     if (hasIoping) {
@@ -278,31 +278,35 @@ export async function runDiskBenchmark(skipFio: boolean = false): Promise<DiskRe
     }
 
     // FIO Random IOPS
+    const fioTestFile = `${testFile}_fio`;
     if (!skipFio && hasFio) {
       const blockSizes = ['4k', '64k', '512k', '1m'] as const;
       const fioResults: Partial<DiskResult['fio']> = {};
 
       for (const bs of blockSizes) {
         printProgress(`Testing random IOPS (${bs})`);
-        const fioResult = await runFio(`${testFile}_fio`, bs, 15);
+        const fioResult = await runFio(fioTestFile, bs, 15);
         if (fioResult) {
           fioResults[bs] = fioResult;
         }
         clearProgress();
       }
 
-      // Clean up fio test file
-      await exec(`rm -f ${testFile}_fio`);
-
       if (Object.keys(fioResults).length === 4) {
         result.fio = fioResults as DiskResult['fio'];
       }
     }
+
+    // Always clean up fio test file
+    await exec(`rm -f ${fioTestFile} 2>/dev/null || true`);
   } catch (error) {
     clearProgress();
     // Clean up on error
     await exec(`rm -f ${testFile} ${testFile}_fio 2>/dev/null || true`);
   }
+
+  // Final cleanup - remove any leftover benix test files
+  await exec(`rm -f /tmp/benix_disk_test_* 2>/dev/null || true`);
 
   return result;
 }
