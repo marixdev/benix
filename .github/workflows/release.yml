@@ -2,8 +2,9 @@ name: Build and Release CLI
 
 on:
   push:
-    tags:
-      - 'v*'  # Trigger on version tags like v1.0.0, v2.1.3
+    branches:
+      - main
+      - master
   workflow_dispatch:
     inputs:
       version:
@@ -12,7 +13,33 @@ on:
         type: string
 
 jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - name: Check commit message for version
+        id: check
+        run: |
+          COMMIT_MSG="${{ github.event.head_commit.message }}"
+          # Check if commit message matches version pattern (e.g., 1.0.0, 2.1.3)
+          if [[ "$COMMIT_MSG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            echo "version=$COMMIT_MSG" >> $GITHUB_OUTPUT
+            echo "✅ Version detected: $COMMIT_MSG"
+          else
+            echo "should_release=false" >> $GITHUB_OUTPUT
+            echo "⏭️ Not a version commit, skipping release"
+          fi
+
   build:
+    needs: check-version
+    if: |
+      always() &&
+      ((github.event_name == 'push' && needs.check-version.outputs.should_release == 'true') ||
+      github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -36,9 +63,18 @@ jobs:
       - name: Install dependencies
         run: bun install
 
+      - name: Set version for build
+        id: set_version
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "version=${{ needs.check-version.outputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          fi
+
       - name: Update version in code
         run: |
-          sed -i "s/const VERSION = .*/const VERSION = '${{ github.event.inputs.version }}';/" src/index.ts
+          sed -i "s/const VERSION = .*/const VERSION = '${{ steps.set_version.outputs.version }}';/" src/index.ts
 
       - name: Build for ${{ matrix.target }}
         run: bun build src/index.ts --compile --target=${{ matrix.bun_target }} --outfile=${{ matrix.outfile }}
@@ -50,7 +86,8 @@ jobs:
           path: ${{ matrix.outfile }}
 
   release:
-    needs: build
+    needs: [check-version, build]
+    if: always() && needs.build.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -65,11 +102,8 @@ jobs:
         id: version
         run: |
           if [ "${{ github.event_name }}" = "push" ]; then
-            # Get version from tag (remove 'v' prefix if present)
-            VERSION="${GITHUB_REF#refs/tags/}"
-            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "version=${{ needs.check-version.outputs.version }}" >> $GITHUB_OUTPUT
           else
-            # Manual dispatch
             echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
           fi
 
