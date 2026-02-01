@@ -230,7 +230,7 @@ export async function uploadResults(result: BenchmarkResult, apiUrl: string, isP
       printSuccess('Results uploaded!');
       // Use localhost URL for local testing, production URL otherwise
       const baseUrl = apiUrl.includes('localhost') ? 'http://localhost:8081' : 'https://benix.app';
-      return `${baseUrl}/benchmark/${data.id}`;
+      return `${baseUrl}/b/${data.id}`;
     }
 
     printError('Failed to get result ID');

@@ -61,8 +61,11 @@ async function main() {
     console.log('');
   }
 
-  // Ask about upload if not specified
-  let uploadFlag = args.upload;
+  // Determine upload mode:
+  // -p = auto upload private (no prompt)
+  // -u = auto upload public (no prompt)
+  // neither = ask user
+  let uploadFlag = args.upload || args.private;
   if (uploadFlag === undefined && !args.quiet) {
     uploadFlag = await askUploadPreference();
   }
