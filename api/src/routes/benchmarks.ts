@@ -11,18 +11,115 @@ const isNetworkInfo = (network: unknown): network is NetworkInfo => {
 
 const app = new Hono();
 
-// Strict rate limiting for benchmark uploads: 10 per minute per IP
+// Strict rate limiting for benchmark uploads: 3 per hour per IP
 app.post('/', rateLimit({
-  windowMs: 60 * 1000,
-  maxRequests: 10,
-  blockDuration: 5 * 60 * 1000,
+  windowMs: 60 * 60 * 1000, // 1 hour
+  maxRequests: 3,
+  blockDuration: 60 * 60 * 1000, // 1 hour block
   keyPrefix: 'benchmark-upload'
 }));
+
+// Validate benchmark data
+app.post('/', async (c, next) => {
+  try {
+    const body = await c.req.json<CreateBenchmarkRequest>();
+    
+    // 1. Required fields
+    if (!body.data?.system?.hostname || !body.data?.system?.os) {
+      return c.json({ error: 'Missing required system info' }, 400);
+    }
+    
+    // 2. Duration check - benchmark phải mất ít nhất 60 giây
+    const duration = body.data.duration || 0;
+    if (duration < 60) {
+      console.warn(`[SECURITY] Suspicious short duration: ${duration}s from IP: ${getClientIP(c)}`);
+      return c.json({ error: 'Invalid benchmark duration' }, 400);
+    }
+    
+    // 3. CPU validation
+    if (body.data.cpu) {
+      const cpu = body.data.cpu;
+      // Cores phải >= 1
+      if (!cpu.cores || cpu.cores < 1 || cpu.cores > 512) {
+        return c.json({ error: 'Invalid CPU cores' }, 400);
+      }
+      // Benchmark scores phải hợp lý
+      if (cpu.benchmark) {
+        const { singleThread, multiThread } = cpu.benchmark;
+        // Single thread phải từ 1000 - 100000 ops/s (realistic range)
+        if (singleThread < 1000 || singleThread > 100000) {
+          return c.json({ error: 'Invalid CPU benchmark scores' }, 400);
+        }
+        // Multi thread phải >= single thread
+        if (multiThread < singleThread) {
+          return c.json({ error: 'Invalid CPU benchmark scores' }, 400);
+        }
+        // Multi thread không thể > single * cores * 1.5 (accounting for hyperthreading)
+        if (multiThread > singleThread * cpu.cores * 1.5) {
+          return c.json({ error: 'Invalid CPU benchmark scores' }, 400);
+        }
+      }
+    }
+    
+    // 4. Memory validation
+    if (body.data.memory) {
+      const mem = body.data.memory;
+      // Memory speeds phải hợp lý (0.5 - 200 GB/s)
+      if (mem.read && (mem.read < 0.5 || mem.read > 200)) {
+        return c.json({ error: 'Invalid memory benchmark' }, 400);
+      }
+    }
+    
+    // 5. Fingerprint - tạo hash từ system info để detect duplicate
+    const fingerprint = createFingerprint(body.data);
+    
+    // Check duplicate trong 24h
+    const existingRow = await db.query(
+      'SELECT id FROM benchmarks WHERE fingerprint = ? AND created_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)'
+    ).get(fingerprint) as { id: string } | null;
+    
+    if (existingRow) {
+      console.warn(`[SECURITY] Duplicate benchmark attempt from IP: ${getClientIP(c)}`);
+      return c.json({ error: 'Duplicate benchmark detected', existing_id: existingRow.id }, 409);
+    }
+    
+    // Store validated body and fingerprint
+    c.set('validatedBody', body);
+    c.set('fingerprint', fingerprint);
+    
+    await next();
+  } catch (error) {
+    return c.json({ error: 'Invalid request data' }, 400);
+  }
+});
+
+// Create fingerprint from system info
+function createFingerprint(data: BenchmarkData): string {
+  const parts = [
+    data.system?.hostname || '',
+    data.system?.os || '',
+    data.system?.cpu || '',
+    data.system?.cores || '',
+    data.system?.memory?.total || '',
+    data.system?.virtualization || '',
+  ];
+  
+  // Simple hash
+  const str = parts.join('|');
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return Math.abs(hash).toString(36);
+}
 
 // Create new benchmark
 app.post('/', async (c) => {
   try {
-    const body = await c.req.json<CreateBenchmarkRequest>();
+    const body = c.get('validatedBody') as CreateBenchmarkRequest;
+    const fingerprint = c.get('fingerprint') as string;
     
     if (!body.data || !body.data.system) {
       return c.json({ error: 'Invalid benchmark data' }, 400);
@@ -41,8 +138,8 @@ app.post('/', async (c) => {
     const isPrivate = body.is_private ? 1 : 0;
 
     await db.run(
-      'INSERT INTO benchmarks (id, hostname, data, source, ip, is_private) VALUES (?, ?, ?, ?, ?, ?)',
-      [id, hostname, dataString, source, ip, isPrivate]
+      'INSERT INTO benchmarks (id, hostname, data, source, ip, is_private, fingerprint) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [id, hostname, dataString, source, ip, isPrivate, fingerprint]
     );
 
     console.log(`[BENCHMARK] New benchmark uploaded: ${id} from IP: ${ip} (private: ${isPrivate})`);

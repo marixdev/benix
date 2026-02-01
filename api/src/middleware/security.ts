@@ -231,3 +231,87 @@ export const ipBlocker = async (c: Context, next: Next) => {
   
   await next();
 };
+
+// ========== HMAC SIGNATURE VERIFICATION ==========
+// Secret key for CLI signature (keep in sync with CLI)
+const BENIX_SECRET = process.env.BENIX_SECRET || 'benix-cli-2026-secure-key';
+
+export const verifySignature = async (c: Context, next: Next) => {
+  const signature = c.req.header('X-Benix-Signature');
+  const timestamp = c.req.header('X-Benix-Timestamp');
+  
+  if (!signature || !timestamp) {
+    console.warn(`[SECURITY] Missing signature headers from IP: ${getClientIP(c)}`);
+    return c.json({ error: 'Invalid request' }, 401);
+  }
+  
+  // Check timestamp is within 5 minutes
+  const now = Date.now();
+  const requestTime = parseInt(timestamp, 10);
+  if (isNaN(requestTime) || Math.abs(now - requestTime) > 5 * 60 * 1000) {
+    console.warn(`[SECURITY] Expired timestamp from IP: ${getClientIP(c)}`);
+    return c.json({ error: 'Request expired' }, 401);
+  }
+  
+  // Get body for signature verification
+  const body = await c.req.text();
+  
+  // Create expected signature: HMAC-SHA256(timestamp + body)
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(BENIX_SECRET),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  
+  const data = encoder.encode(timestamp + body);
+  const signatureBuffer = await crypto.subtle.sign('HMAC', key, data);
+  const expectedSignature = Array.from(new Uint8Array(signatureBuffer))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+  
+  if (signature !== expectedSignature) {
+    console.warn(`[SECURITY] Invalid signature from IP: ${getClientIP(c)}`);
+    return c.json({ error: 'Invalid signature' }, 401);
+  }
+  
+  // Store parsed body for later use
+  c.set('parsedBody', JSON.parse(body));
+  
+  await next();
+};
+
+// Validate benchmark data structure
+export const validateBenchmarkData = async (c: Context, next: Next) => {
+  try {
+    const body = c.get('parsedBody') || await c.req.json();
+    
+    // Required fields
+    if (!body.data?.system?.hostname || !body.data?.system?.os) {
+      return c.json({ error: 'Invalid benchmark data: missing required system info' }, 400);
+    }
+    
+    // Check for suspicious patterns (fake data)
+    const system = body.data.system;
+    
+    // Must have reasonable CPU info
+    if (body.data.cpu && (!body.data.cpu.model || !body.data.cpu.cores || body.data.cpu.cores < 1)) {
+      return c.json({ error: 'Invalid CPU data' }, 400);
+    }
+    
+    // Must have reasonable benchmark scores (if present)
+    if (body.data.cpu?.benchmark) {
+      const bench = body.data.cpu.benchmark;
+      if (bench.singleThread < 100 || bench.multiThread < 100) {
+        return c.json({ error: 'Invalid benchmark scores' }, 400);
+      }
+    }
+    
+    c.set('validatedBody', body);
+    await next();
+  } catch (error) {
+    return c.json({ error: 'Invalid JSON data' }, 400);
+  }
+};

@@ -76,12 +76,22 @@ async function initDatabase() {
       source VARCHAR(50) DEFAULT 'benix',
       ip VARCHAR(45),
       is_private TINYINT(1) DEFAULT 0,
+      fingerprint VARCHAR(20),
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       INDEX idx_created_at (created_at),
       INDEX idx_hostname (hostname),
-      INDEX idx_private (is_private)
+      INDEX idx_private (is_private),
+      INDEX idx_fingerprint (fingerprint)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+
+  // Add fingerprint column if not exists (for existing databases)
+  await db.exec(`
+    ALTER TABLE benchmarks ADD COLUMN IF NOT EXISTS fingerprint VARCHAR(20),
+    ADD INDEX IF NOT EXISTS idx_fingerprint (fingerprint)
+  `).catch(() => {
+    // Ignore error if column already exists
+  });
 
   // Create affiliates table
   await db.exec(`

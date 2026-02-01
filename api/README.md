@@ -9,7 +9,7 @@ Backend API server for the Benix VPS benchmarking platform.
 - **Database**: MariaDB / MySQL
 - **ID Generation**: [nanoid](https://github.com/ai/nanoid)
 
-## Setup
+## Local Development
 
 ### 1. Install Dependencies
 
@@ -18,114 +18,210 @@ cd api
 bun install
 ```
 
-### 2. Create Database (MariaDB)
-
-```sql
-CREATE DATABASE benix CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER 'benix'@'localhost' IDENTIFIED BY 'your_password';
-GRANT ALL PRIVILEGES ON benix.* TO 'benix'@'localhost';
-FLUSH PRIVILEGES;
-```
-
-### 3. Configure Environment
+### 2. Configure Environment
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env`:
-```env
-DB_HOST=localhost
-DB_PORT=3306
-DB_USER=benix
-DB_PASSWORD=your_password
-DB_NAME=benix
-ADMIN_API_KEY=your_secure_admin_key
-PORT=3001
-```
+### 3. Run
 
-### 4. Run
-
-Development:
 ```bash
 bun run dev
 ```
 
-Production:
+---
+
+## CloudPanel Deployment (Step-by-step)
+
+### Step 1: Create Node.js Site in CloudPanel
+
+1. Login to CloudPanel Admin Panel
+2. Go to **Sites** → **Add Site**
+3. Choose **Create a Node.js Site**
+4. Fill in:
+   - Domain: `api.benix.app`
+   - Node.js Version: `20 LTS` (hoặc mới nhất)
+   - App Port: `3001`
+5. Click **Create**
+
+### Step 2: Create Database
+
+1. Go to **Databases** → **Add Database**
+2. Fill in:
+   - Database Name: `benix`
+   - Database User: `benix`
+   - Password: (lưu lại password này)
+3. Click **Create**
+
+### Step 3: SSH vào Server
+
+SSH với **Site User** (không phải root):
+
 ```bash
-bun run start
+ssh benix@your-server-ip
 ```
 
-## CloudPanel Deployment
-
-### 1. Create Node.js Site
-
-- Add new site in CloudPanel
-- Choose Node.js app type
-- Set Node.js version (or use Bun)
-
-### 2. Setup Bun on Server
+### Step 4: Install Bun
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
 source ~/.bashrc
+bun --version
 ```
 
-### 3. Deploy Code
+### Step 5: Clone và Setup Code
 
 ```bash
-cd /home/youruser/htdocs/api.benix.app
-git clone https://github.com/marixdev/benix.git .
-cd api
+cd htdocs/api.benix.app
+
+# Clone repo (hoặc upload code)
+git clone https://github.com/marixdev/benix.git temp
+mv temp/api/* .
+rm -rf temp
+
+# Install dependencies
 bun install
 ```
 
-### 4. Create Database
-
-In CloudPanel > Databases > Add Database:
-- Database name: `benix`
-- User: `benix`
-- Password: (save this)
-
-### 5. Configure Environment
+### Step 6: Configure Environment
 
 ```bash
 cp .env.example .env
 nano .env
-# Set DB_HOST, DB_USER, DB_PASSWORD, DB_NAME
 ```
 
-### 6. Setup PM2 (Process Manager)
+Điền thông tin:
+
+```env
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_USER=benix
+DB_PASSWORD=your_database_password
+DB_NAME=benix
+ADMIN_API_KEY=your_secure_admin_key_here
+PORT=3001
+```
+
+### Step 7: Test Run
 
 ```bash
-npm install -g pm2
-
-# Create ecosystem file
-cat > ecosystem.config.cjs << 'EOPM2'
-module.exports = {
-  apps: [{
-    name: 'benix-api',
-    script: 'bun',
-    args: 'run start',
-    cwd: '/home/youruser/htdocs/api.benix.app/api',
-    env: {
-      NODE_ENV: 'production'
-    }
-  }]
-};
-EOPM2
-
-pm2 start ecosystem.config.cjs
-pm2 save
-pm2 startup
+bun run start
 ```
 
-### 7. Reverse Proxy (Nginx)
+Nếu thấy `✅ Database tables ready` và server chạy OK thì tiếp tục. Nhấn `Ctrl+C` để dừng.
 
-CloudPanel auto-generates nginx config. Add to your site config:
+### Step 8: Install PM2
+
+```bash
+npm install pm2@latest -g
+```
+
+### Step 9: Start với PM2
+
+```bash
+pm2 start bun --name benix-api -- run start
+```
+
+Kiểm tra status:
+
+```bash
+pm2 status
+```
+
+Phải thấy `benix-api` với status `online`.
+
+### Step 10: Save PM2 Configuration
+
+```bash
+pm2 save
+```
+
+### Step 11: Setup Auto-start sau Reboot
+
+> ⚠️ CloudPanel site user không có quyền sudo, nên dùng **Crontab**.
+
+**Với Site User (benix-api):**
+
+1. Lấy đường dẫn đầy đủ của PM2:
+
+```bash
+which pm2
+```
+
+Output ví dụ: `/home/benix-api/.nvm/versions/node/v20.10.0/bin/pm2`
+
+2. Edit crontab:
+
+```bash
+crontab -e
+```
+
+3. Thêm dòng này vào cuối file (thay đường dẫn pm2 cho đúng):
+
+```cron
+@reboot /home/benix-api/.nvm/versions/node/v20.10.0/bin/pm2 resurrect
+```
+
+4. Save và thoát (`Ctrl+X`, `Y`, `Enter`)
+
+5. Kiểm tra crontab đã lưu:
+
+```bash
+crontab -l
+```
+
+**Với Root (nếu cần dùng systemd):**
+
+SSH vào server với **root**:
+
+```bash
+ssh root@your-server-ip
+
+# Chạy PM2 startup với đường dẫn đầy đủ và user cụ thể
+env PATH=$PATH:/home/benix-api/.nvm/versions/node/v20.10.0/bin /home/benix-api/.nvm/versions/node/v20.10.0/lib/node_modules/pm2/bin/pm2 startup systemd -u benix-api --hp /home/benix-api
+
+# Quay lại site user để save
+su - benix-api
+pm2 save
+```
+
+1. Lấy đường dẫn PM2:
+
+```bash
+which pm2
+```
+
+Output ví dụ: `/home/benix/.nvm/versions/node/v20.10.0/bin/pm2`
+
+2. Edit crontab:
+
+```bash
+crontab -e
+```
+
+3. Thêm dòng này vào cuối file (thay đường dẫn pm2 đúng):
+
+```cron
+@reboot /home/benix/.nvm/versions/node/v20.10.0/bin/pm2 resurrect
+```
+
+4. Save và thoát (`Ctrl+X`, `Y`, `Enter`)
+
+5. Kiểm tra crontab đã lưu:
+
+```bash
+crontab -l
+```
+
+### Step 12: Configure Reverse Proxy
+
+Trong CloudPanel, vào **Sites** → **api.benix.app** → **Vhost**
+
+Tìm `location /` và sửa thành:
 
 ```nginx
-location /api {
+location / {
     proxy_pass http://127.0.0.1:3001;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
@@ -133,15 +229,53 @@ location /api {
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
     proxy_cache_bypass $http_upgrade;
-}
-
-location /sitemap.xml {
-    proxy_pass http://127.0.0.1:3001/api/sitemap.xml;
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
+    proxy_read_timeout 86400;
 }
 ```
+
+Click **Save** và **Restart** nginx.
+
+### Step 13: Test
+
+```bash
+curl https://api.benix.app/health
+```
+
+Phải trả về:
+```json
+{"status":"ok","timestamp":"..."}
+```
+
+### Step 14: Reboot Test
+
+```bash
+sudo reboot
+```
+
+Sau khi server khởi động lại, SSH vào và kiểm tra:
+
+```bash
+pm2 status
+```
+
+`benix-api` phải `online`.
+
+---
+
+## PM2 Commands
+
+| Command | Mô tả |
+|---------|-------|
+| `pm2 status` | Xem trạng thái apps |
+| `pm2 logs benix-api` | Xem logs |
+| `pm2 restart benix-api` | Restart app |
+| `pm2 stop benix-api` | Stop app |
+| `pm2 delete benix-api` | Xóa app khỏi PM2 |
+| `pm2 monit` | Monitor realtime |
+
+---
 
 ## API Endpoints
 
@@ -163,6 +297,45 @@ location /sitemap.xml {
 | `POST` | `/api/affiliates/admin` | Create affiliate |
 | `PUT` | `/api/affiliates/admin/:id` | Update affiliate |
 | `DELETE` | `/api/affiliates/admin/:id` | Delete affiliate |
+
+---
+
+## Troubleshooting
+
+### Xem logs
+
+```bash
+pm2 logs benix-api --lines 100
+```
+
+### Database connection error
+
+Kiểm tra `.env` có đúng credentials không:
+
+```bash
+mysql -u benix -p benix
+# Nhập password, nếu vào được là OK
+```
+
+### PM2 không chạy sau reboot
+
+Kiểm tra crontab:
+
+```bash
+crontab -l
+```
+
+Phải có dòng `@reboot pm2 resurrect`.
+
+### Port đã được sử dụng
+
+```bash
+lsof -i :3001
+# Kill process nếu cần
+kill -9 <PID>
+```
+
+---
 
 ## License
 
