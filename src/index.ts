@@ -62,12 +62,30 @@ async function main() {
   }
 
   // Determine upload mode:
-  // -p = auto upload private (no prompt)
+  // -p = private mode (save to file only, no upload)
   // -u = auto upload public (no prompt)
-  // neither = ask user
-  let uploadFlag = args.upload || args.private;
-  if (uploadFlag === undefined && !args.quiet) {
-    uploadFlag = await askUploadPreference();
+  // neither = ask user at start
+  let uploadMode: 'public' | 'private' | 'none' = 'none';
+  
+  if (args.private) {
+    uploadMode = 'private';
+  } else if (args.upload) {
+    uploadMode = 'public';
+  } else if (!args.quiet) {
+    // Ask at the beginning like tocdo.io
+    uploadMode = await askUploadMode();
+  }
+
+  // Initialize session for temporal validation (anti-spam)
+  let sessionId: string | undefined;
+  try {
+    const initRes = await fetch(`${BENIX_API}/api/benchmarks/init`, { method: 'POST' });
+    if (initRes.ok) {
+      const initData = await initRes.json() as { session_id: string };
+      sessionId = initData.session_id;
+    }
+  } catch {
+    // Silent fail - session is optional for backward compatibility
   }
 
   const startTime = Date.now();
@@ -127,27 +145,39 @@ async function main() {
   // Print summary
   printSummary(duration);
 
-  // Upload if requested
-  if (uploadFlag) {
-    const url = await uploadResults(result, BENIX_API, args.private);
-    if (url && !args.private) {
+  // Handle output based on mode
+  const hostname = systemInfo?.hostname || 'server';
+  const { generateTxtResult } = await import('./utils/output');
+  
+  if (uploadMode === 'public') {
+    // Upload to benix.app (public)
+    const url = await uploadResults(result, BENIX_API, false, sessionId);
+    if (url) {
       console.log('');
       console.log(`  ${colors.white}View your results at:${colors.reset}`);
       console.log(`  ${colors.cyan}${colors.bold}${url}${colors.reset}`);
       console.log('');
     }
   } else {
-    // Save results to local file
-    const { generateTxtResult } = await import('./utils/output');
-    const hostname = systemInfo?.hostname || 'server';
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const filename = `benix-${hostname}-${timestamp}.txt`;
+    // Private mode: upload basic info + save to file
+    // Upload basic info to server (private flag)
+    await uploadResults(result, BENIX_API, true, sessionId);
     
+    // Also save full results to local file
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    
+    // Determine save directory: /root for root user, else $HOME
+    let saveDir = process.env.HOME || '/tmp';
+    if (root) {
+      saveDir = '/root';
+    }
+    
+    const filename = `${saveDir}/benix-${hostname}-${timestamp}.txt`;
     const txtContent = generateTxtResult(result, hostname);
     await Bun.write(filename, txtContent);
     
     console.log('');
-    console.log(`  ${colors.green}✓${colors.reset} Results saved to ${colors.white}${filename}${colors.reset}`);
+    console.log(`  ${colors.green}✓${colors.reset} Results exported to ${colors.white}${filename}${colors.reset}`);
   }
 
   // Footer
@@ -156,13 +186,14 @@ async function main() {
   console.log('');
 }
 
-async function askUploadPreference(): Promise<boolean> {
+async function askUploadMode(): Promise<'public' | 'private' | 'none'> {
   console.log('');
-  console.log(`  ${colors.white}Would you like to upload results to benix.app?${colors.reset}`);
-  console.log(`  ${colors.dim}This will generate a shareable URL for your benchmark.${colors.reset}`);
+  console.log(`  ${colors.white}Share your benchmark results?${colors.reset}`);
+  console.log(`  ${colors.dim}1. Yes, upload to benix.app (public)${colors.reset}`);
+  console.log(`  ${colors.dim}2. No, save to file only (private)${colors.reset}`);
   console.log('');
 
-  process.stdout.write(`  Upload results? [y/N] `);
+  process.stdout.write(`  Choice [1/2]: `);
   
   const response = await new Promise<string>((resolve) => {
     let input = '';
@@ -181,18 +212,19 @@ async function askUploadPreference(): Promise<boolean> {
     });
   });
 
-  const upload = response === 'y' || response === 'yes';
-  
   // Clear the entire prompt section
   if (process.stdout.isTTY) {
     process.stdout.write('\x1b[5A\x1b[J');
   }
+
+  // Determine mode
+  const mode = response === '1' || response === 'y' || response === 'yes' ? 'public' : 'private';
   
   // Show appropriate message
-  if (upload) {
-    process.stdout.write(`  ${colors.green}✓${colors.reset} Results will be uploaded after benchmark\n`);
+  if (mode === 'public') {
+    process.stdout.write(`  ${colors.green}✓${colors.reset} Results will be uploaded to benix.app\n`);
   } else {
-    process.stdout.write(`  ${colors.dim}○${colors.reset} Results will not be uploaded\n`);
+    process.stdout.write(`  ${colors.dim}○${colors.reset} Results will be saved to file only\n`);
   }
   
   // Wait then clear the message
@@ -201,7 +233,7 @@ async function askUploadPreference(): Promise<boolean> {
     process.stdout.write('\x1b[1A\x1b[J');
   }
 
-  return upload;
+  return mode;
 }
 
 function printSummary(duration: number) {
@@ -219,8 +251,8 @@ ${colors.dim}One Command. Full Insights.${colors.reset}
 ${colors.white}Usage:${colors.reset} benix [OPTIONS]
 
 ${colors.white}Options:${colors.reset}
-  -u, --upload       Upload results to benix.app
-  -p, --private      Mark results as private (only basic info visible)
+  -u, --upload       Upload results to benix.app (public)
+  -p, --private      Save results to file only (no upload)
   -q, --quiet        Quiet mode (minimal output)
   --skip-fio         Skip fio random IOPS test (if fio not installed)
   --servers <num>    Number of speed test servers (default: 20)
@@ -228,9 +260,9 @@ ${colors.white}Options:${colors.reset}
   -v, --version      Show version
 
 ${colors.white}Examples:${colors.reset}
-  ${colors.dim}$${colors.reset} benix              ${colors.dim}# Run full benchmark${colors.reset}
-  ${colors.dim}$${colors.reset} benix -u           ${colors.dim}# Run and upload results${colors.reset}
-  ${colors.dim}$${colors.reset} benix -u -p        ${colors.dim}# Upload as private benchmark${colors.reset}
+  ${colors.dim}$${colors.reset} benix              ${colors.dim}# Run benchmark (will ask to share)${colors.reset}
+  ${colors.dim}$${colors.reset} benix -u           ${colors.dim}# Run and upload results (public)${colors.reset}
+  ${colors.dim}$${colors.reset} benix -p           ${colors.dim}# Run and save to file only${colors.reset}
   ${colors.dim}$${colors.reset} benix --servers 4  ${colors.dim}# Test only 4 servers${colors.reset}
 
 ${colors.white}Website:${colors.reset}  ${colors.cyan}https://benix.app${colors.reset}

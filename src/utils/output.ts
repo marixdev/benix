@@ -36,6 +36,10 @@ export function generateTxtResult(result: BenchmarkResult, hostname: string): st
     lines.push(`  Uptime          : ${result.system.uptime}`);
     lines.push(`  Load Average    : ${result.system.loadAverage}`);
     lines.push(`  Virtualization  : ${result.system.virtualization}`);
+    // IPv4/IPv6 connectivity
+    const ipv4 = result.system.ipv4 ? '✔ Online' : '✘ Offline';
+    const ipv6 = result.system.ipv6 ? '✔ Online' : '✘ Offline';
+    lines.push(`  IPv4/IPv6       : ${ipv4} / ${ipv6}`);
     lines.push('');
   }
 
@@ -83,8 +87,24 @@ export function generateTxtResult(result: BenchmarkResult, hostname: string): st
     lines.push('┌────────────────────────────────────────────────────────────────────────────────┐');
     lines.push('│                            DISK PERFORMANCE                                    │');
     lines.push('└────────────────────────────────────────────────────────────────────────────────┘');
-    lines.push(`  Sequential Write  : ${result.disk.sequentialWrite}`);
-    lines.push(`  Sequential Read   : ${result.disk.sequentialRead}`);
+    
+    // Show table format if rounds available
+    if (result.disk.writeRounds?.length || result.disk.readRounds?.length) {
+      lines.push('  Test                 Average        Run 1        Run 2        Run 3');
+      lines.push('  ' + '─'.repeat(72));
+      
+      const padVal = (v: string | undefined, len: number) => (v || '-').padEnd(len);
+      
+      // Write row
+      lines.push(`  Sequential Write     ${padVal(result.disk.sequentialWrite, 13)} ${padVal(result.disk.writeRounds?.[0], 12)} ${padVal(result.disk.writeRounds?.[1], 12)} ${result.disk.writeRounds?.[2] || '-'}`);
+      
+      // Read row
+      lines.push(`  Sequential Read      ${padVal(result.disk.sequentialRead, 13)} ${padVal(result.disk.readRounds?.[0], 12)} ${padVal(result.disk.readRounds?.[1], 12)} ${result.disk.readRounds?.[2] || '-'}`);
+    } else {
+      lines.push(`  Sequential Write  : ${result.disk.sequentialWrite}`);
+      lines.push(`  Sequential Read   : ${result.disk.sequentialRead}`);
+    }
+    
     lines.push(`  I/O Latency       : ${result.disk.ioLatency}`);
     
     if (result.disk.fio) {
@@ -132,8 +152,21 @@ export function generateTxtResult(result: BenchmarkResult, hostname: string): st
   return lines.join('\n');
 }
 
-export async function uploadResults(result: BenchmarkResult, apiUrl: string, isPrivate: boolean = false): Promise<string | null> {
-  printProgress(isPrivate ? 'Uploading private results to benix.app' : 'Uploading results to benix.app');
+export async function uploadResults(result: BenchmarkResult, apiUrl: string, isPrivate: boolean = false, sessionId?: string): Promise<string | null> {
+  // Only show progress for public uploads
+  if (!isPrivate) {
+    printProgress('Uploading results to benix.app');
+  }
+  
+  // Mask IP address before upload (e.g., 103.22.103.33 → 103.22.**.33)
+  const maskIp = (ip: string): string => {
+    if (!ip) return ip;
+    const parts = ip.split('.');
+    if (parts.length === 4) {
+      return `${parts[0]}.${parts[1]}.**.${parts[3]}`;
+    }
+    return ip;
+  };
   
   try {
     // Transform result to match API expected format
@@ -160,6 +193,8 @@ export async function uploadResults(result: BenchmarkResult, apiUrl: string, isP
           virtualization: result.system.virtualization,
           uptime: result.system.uptime,
           loadAverage: result.system.loadAverage,
+          ipv4: result.system.ipv4,
+          ipv6: result.system.ipv6,
         } : null,
         cpu: result.cpu ? {
           model: result.cpu.model,
@@ -186,11 +221,13 @@ export async function uploadResults(result: BenchmarkResult, apiUrl: string, isP
         disk: result.disk ? {
           seqWrite: result.disk.sequentialWrite,
           seqRead: result.disk.sequentialRead,
+          writeRounds: result.disk.writeRounds,
+          readRounds: result.disk.readRounds,
           ioLatency: result.disk.ioLatency,
           fio: result.disk.fio,
         } : null,
         network: result.network ? {
-          publicIp: result.network.publicIp,
+          publicIp: maskIp(result.network.publicIp),
           provider: result.network.provider,
           location: result.network.location,
           tests: result.network.tests.map(t => ({
@@ -205,6 +242,7 @@ export async function uploadResults(result: BenchmarkResult, apiUrl: string, isP
       },
       source: 'benix',
       is_private: isPrivate,
+      session_id: sessionId,
     };
 
     const response = await fetch(`${apiUrl}/api/benchmarks`, {
@@ -215,29 +253,40 @@ export async function uploadResults(result: BenchmarkResult, apiUrl: string, isP
       body: JSON.stringify(payload),
     });
 
-    clearProgress();
+    if (!isPrivate) {
+      clearProgress();
+    }
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('Upload error:', errorText);
-      printError('Failed to upload results');
+      if (!isPrivate) {
+        console.error('Upload error:', errorText);
+        printError('Failed to upload results');
+      }
+      // Silent fail for private - still save to file
       return null;
     }
 
     const data = await response.json() as { success?: boolean; id?: string; url?: string };
     
     if (data.success && data.id) {
-      printSuccess('Results uploaded!');
+      if (!isPrivate) {
+        printSuccess('Results uploaded!');
+      }
       // Use localhost URL for local testing, production URL otherwise
       const baseUrl = apiUrl.includes('localhost') ? 'http://localhost:8081' : 'https://benix.app';
       return `${baseUrl}/b/${data.id}`;
     }
 
-    printError('Failed to get result ID');
+    if (!isPrivate) {
+      printError('Failed to get result ID');
+    }
     return null;
   } catch (error) {
-    clearProgress();
-    printError(`Upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    if (!isPrivate) {
+      clearProgress();
+      printError(`Upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
     return null;
   }
 }

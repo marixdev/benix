@@ -45,7 +45,7 @@ jobs:
       matrix:
         include:
           - target: x64
-            bun_target: bun-linux-x64
+            bun_target: bun-linux-x64-baseline
             outfile: benix
           - target: arm64
             bun_target: bun-linux-arm64

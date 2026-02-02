@@ -50,33 +50,61 @@ const SEARCH_REGIONS = [
   'London', 'Frankfurt', 'Paris', 'Amsterdam', 'Stockholm', 'Madrid', 'Milan',
   // North America
   'Los Angeles', 'New York', 'Chicago', 'Toronto', 'Dallas', 'Miami', 'Seattle',
-  // South America
-  'Sao Paulo', 'Buenos Aires', 'Santiago', 'Lima',
+  // South America (use country names for better results)
+  'Brazil', 'Argentina', 'Chile', 'Peru',
   // Africa
-  'Johannesburg', 'Cape Town', 'Cairo', 'Lagos',
+  'South Africa', 'Egypt', 'Nigeria', 'Kenya',
   // Middle East
-  'Dubai', 'Tel Aviv', 'Riyadh',
+  'Dubai', 'Israel', 'Saudi Arabia', 'Turkey',
   // Russia
-  'Moscow', 'Saint Petersburg',
+  'Russia', 'Moscow',
 ];
 
-// Map search regions to geographic groups
-const REGION_MAPPING: { [key: string]: string } = {
-  'Hanoi': 'Vietnam', 'Ho Chi Minh': 'Vietnam', 'Da Nang': 'Vietnam',
-  'Singapore': 'Southeast Asia', 'Bangkok': 'Southeast Asia', 'Jakarta': 'Southeast Asia',
-  'Kuala Lumpur': 'Southeast Asia', 'Manila': 'Southeast Asia', 'Phnom Penh': 'Southeast Asia',
-  'Tokyo': 'East Asia', 'Hong Kong': 'East Asia', 'Seoul': 'East Asia', 'Taipei': 'East Asia', 'Shanghai': 'East Asia',
-  'Mumbai': 'South Asia', 'Delhi': 'South Asia', 'Bangalore': 'South Asia',
-  'Sydney': 'Oceania', 'Melbourne': 'Oceania', 'Auckland': 'Oceania', 'Brisbane': 'Oceania',
-  'London': 'Europe', 'Frankfurt': 'Europe', 'Paris': 'Europe', 'Amsterdam': 'Europe',
-  'Stockholm': 'Europe', 'Madrid': 'Europe', 'Milan': 'Europe',
-  'Los Angeles': 'North America', 'New York': 'North America', 'Chicago': 'North America',
-  'Toronto': 'North America', 'Dallas': 'North America', 'Miami': 'North America', 'Seattle': 'North America',
-  'Sao Paulo': 'South America', 'Buenos Aires': 'South America', 'Santiago': 'South America', 'Lima': 'South America',
-  'Johannesburg': 'Africa', 'Cape Town': 'Africa', 'Cairo': 'Africa', 'Lagos': 'Africa',
-  'Dubai': 'Middle East', 'Tel Aviv': 'Middle East', 'Riyadh': 'Middle East',
-  'Moscow': 'Russia', 'Saint Petersburg': 'Russia',
+// Map countries to geographic regions (for proper grouping)
+const COUNTRY_TO_REGION: { [key: string]: string } = {
+  // Vietnam
+  'Vietnam': 'Vietnam',
+  // Southeast Asia
+  'Singapore': 'Southeast Asia', 'Thailand': 'Southeast Asia', 'Indonesia': 'Southeast Asia',
+  'Malaysia': 'Southeast Asia', 'Philippines': 'Southeast Asia', 'Cambodia': 'Southeast Asia',
+  'Myanmar': 'Southeast Asia', 'Laos': 'Southeast Asia', 'Brunei': 'Southeast Asia',
+  // East Asia
+  'Japan': 'East Asia', 'Hong Kong': 'East Asia', 'South Korea': 'East Asia',
+  'Taiwan': 'East Asia', 'China': 'East Asia', 'Macau': 'East Asia', 'Mongolia': 'East Asia',
+  // South Asia
+  'India': 'South Asia', 'Pakistan': 'South Asia', 'Bangladesh': 'South Asia',
+  'Sri Lanka': 'South Asia', 'Nepal': 'South Asia',
+  // Oceania
+  'Australia': 'Oceania', 'New Zealand': 'Oceania', 'Fiji': 'Oceania',
+  'Papua New Guinea': 'Oceania',
+  // Europe
+  'United Kingdom': 'Europe', 'Germany': 'Europe', 'France': 'Europe',
+  'Netherlands': 'Europe', 'Sweden': 'Europe', 'Spain': 'Europe', 'Italy': 'Europe',
+  'Poland': 'Europe', 'Belgium': 'Europe', 'Switzerland': 'Europe', 'Austria': 'Europe',
+  'Norway': 'Europe', 'Denmark': 'Europe', 'Finland': 'Europe', 'Ireland': 'Europe',
+  'Portugal': 'Europe', 'Czech Republic': 'Europe', 'Romania': 'Europe', 'Greece': 'Europe',
+  'Hungary': 'Europe', 'Ukraine': 'Europe',
+  // North America
+  'United States': 'North America', 'Canada': 'North America', 'Mexico': 'North America',
+  // South America
+  'Brazil': 'South America', 'Argentina': 'South America', 'Chile': 'South America',
+  'Peru': 'South America', 'Colombia': 'South America', 'Venezuela': 'South America',
+  'Ecuador': 'South America', 'Uruguay': 'South America', 'Paraguay': 'South America',
+  // Africa
+  'South Africa': 'Africa', 'Egypt': 'Africa', 'Nigeria': 'Africa', 'Kenya': 'Africa',
+  'Morocco': 'Africa', 'Ghana': 'Africa', 'Tanzania': 'Africa', 'Algeria': 'Africa',
+  // Middle East
+  'United Arab Emirates': 'Middle East', 'Israel': 'Middle East', 'Saudi Arabia': 'Middle East',
+  'Turkey': 'Middle East', 'Qatar': 'Middle East', 'Kuwait': 'Middle East', 'Bahrain': 'Middle East',
+  'Oman': 'Middle East', 'Jordan': 'Middle East', 'Lebanon': 'Middle East',
+  // Russia & CIS
+  'Russia': 'Russia', 'Kazakhstan': 'Russia', 'Belarus': 'Russia',
 };
+
+// Helper function to get region from country
+function getRegionFromCountry(country: string): string {
+  return COUNTRY_TO_REGION[country] || 'Other';
+}
 
 async function getPublicIp(): Promise<{ ip: string; provider: string; location: string }> {
   let ip = 'Unknown';
@@ -158,18 +186,39 @@ async function testLatency(server: SpeedtestServer): Promise<number> {
   try {
     // Extract hostname from URL
     let hostname = '';
+    let baseUrl = '';
     try {
       const urlObj = new URL(server.url);
       hostname = urlObj.hostname;
+      baseUrl = `${urlObj.protocol}//${urlObj.host}`;
     } catch {
       hostname = (server.host || '').split(':')[0];
+      baseUrl = server.url.replace(/\/upload.*$/, '');
     }
 
     if (!hostname) return -1;
 
-    const result = await exec(`ping -c 1 -W 2 ${hostname} 2>/dev/null | grep 'time=' | sed 's/.*time=\\([0-9.]*\\).*/\\1/'`);
-    const latency = parseFloat(result.trim());
-    return !isNaN(latency) && latency > 0 ? latency : -1;
+    // Try ping first (increased timeout to 5 seconds for far regions)
+    try {
+      const pingResult = await exec(`ping -c 1 -W 5 ${hostname} 2>/dev/null | grep 'time=' | sed 's/.*time=\\([0-9.]*\\).*/\\1/'`);
+      const latency = parseFloat(pingResult.trim());
+      if (!isNaN(latency) && latency > 0) {
+        return latency;
+      }
+    } catch {}
+
+    // Fallback: use HTTP timing if ping fails (some servers block ICMP)
+    try {
+      const httpResult = await exec(
+        `curl -o /dev/null -s -w '%{time_connect}' --connect-timeout 5 '${baseUrl}/latency.txt?x=${Date.now()}' 2>/dev/null || curl -o /dev/null -s -w '%{time_connect}' --connect-timeout 5 '${baseUrl}/' 2>/dev/null`
+      );
+      const connectTime = parseFloat(httpResult.trim());
+      if (!isNaN(connectTime) && connectTime > 0) {
+        return connectTime * 1000; // Convert to ms
+      }
+    } catch {}
+
+    return -1;
   } catch {
     return -1;
   }
@@ -242,26 +291,30 @@ export async function runNetworkBenchmark(
     return result;
   }
 
-  // Test latency to pre-selected servers (2-3 per region)
+  // Test latency to pre-selected servers (up to 3 per geographic region)
   const serversToTest: SpeedtestServer[] = [];
   const regionCount: { [region: string]: number } = {};
 
   for (const server of servers) {
-    const region = server.region || 'Other';
-    regionCount[region] = (regionCount[region] || 0) + 1;
-    if (regionCount[region] <= 3) {
+    const geoRegion = getRegionFromCountry(server.country);
+    regionCount[geoRegion] = (regionCount[geoRegion] || 0) + 1;
+    if (regionCount[geoRegion] <= 3) {
       serversToTest.push(server);
     }
   }
 
   // Test latency and collect results
   const serverLatencies: Array<{ server: SpeedtestServer; latency: number }> = [];
+  const failedServers: SpeedtestServer[] = [];
 
   for (let i = 0; i < serversToTest.length; i++) {
     const server = serversToTest[i];
     const latency = await testLatency(server);
     if (latency > 0) {
       serverLatencies.push({ server, latency });
+    } else {
+      // Keep track of failed servers for regions without any successful tests
+      failedServers.push(server);
     }
   }
   clearProgress();
@@ -273,7 +326,7 @@ export async function runNetworkBenchmark(
   const regionGroups: { [region: string]: typeof serverLatencies } = {};
   
   for (const entry of serverLatencies) {
-    const geoRegion = REGION_MAPPING[entry.server.region] || 'Other';
+    const geoRegion = getRegionFromCountry(entry.server.country);
     if (!regionGroups[geoRegion]) {
       regionGroups[geoRegion] = [];
     }
@@ -303,34 +356,52 @@ export async function runNetworkBenchmark(
   const basePerRegion = Math.max(1, Math.floor(maxServers / availableRegions.length));
   const maxPerRegion = Math.min(4, Math.ceil(maxServers / availableRegions.length) + 1);
 
-  // First pass: add 1-2 unique countries per region (ensure global coverage)
+  // First pass: add exactly 1 server from each region (ensure global coverage first)
   for (const region of regionOrder) {
     const regionServers = regionGroups[region] || [];
     
     for (const entry of regionServers) {
-      if (regionServerCount[region] >= 2) break;
-      if (!seenCountries.has(entry.server.country)) {
-        selectedServers.push(entry);
-        selectedIds.add(entry.server.id);
-        seenCountries.add(entry.server.country);
-        regionServerCount[region]++;
+      if (regionServerCount[region] >= 1) break;
+      selectedServers.push(entry);
+      selectedIds.add(entry.server.id);
+      seenCountries.add(entry.server.country);
+      regionServerCount[region]++;
+    }
+    
+    // If no servers with successful latency test, try failed servers for this region
+    if (regionServerCount[region] === 0) {
+      for (const server of failedServers) {
+        if (regionServerCount[region] >= 1) break;
+        const serverRegion = getRegionFromCountry(server.country);
+        if (serverRegion === region && !selectedIds.has(server.id)) {
+          // Add with estimated high latency (will be measured during actual test)
+          selectedServers.push({ server, latency: 999 });
+          selectedIds.add(server.id);
+          seenCountries.add(server.country);
+          regionServerCount[region]++;
+        }
       }
     }
   }
 
-  // Second pass: add more from each region (up to maxPerRegion) with unique countries
-  for (const region of regionOrder) {
-    if (selectedServers.length >= maxServers) break;
-    const regionServers = regionGroups[region] || [];
-    
-    for (const entry of regionServers) {
+  // Second pass: add more from each region (round-robin to ensure fairness)
+  let addedInPass = true;
+  while (addedInPass && selectedServers.length < maxServers) {
+    addedInPass = false;
+    for (const region of regionOrder) {
       if (selectedServers.length >= maxServers) break;
-      if (regionServerCount[region] >= maxPerRegion) break;
-      if (!selectedIds.has(entry.server.id) && !seenCountries.has(entry.server.country)) {
-        selectedServers.push(entry);
-        selectedIds.add(entry.server.id);
-        seenCountries.add(entry.server.country);
-        regionServerCount[region]++;
+      if (regionServerCount[region] >= maxPerRegion) continue;
+      
+      const regionServers = regionGroups[region] || [];
+      for (const entry of regionServers) {
+        if (!selectedIds.has(entry.server.id)) {
+          selectedServers.push(entry);
+          selectedIds.add(entry.server.id);
+          seenCountries.add(entry.server.country);
+          regionServerCount[region]++;
+          addedInPass = true;
+          break; // Move to next region
+        }
       }
     }
   }
@@ -339,7 +410,7 @@ export async function runNetworkBenchmark(
   for (const entry of serverLatencies) {
     if (selectedServers.length >= maxServers) break;
     if (!selectedIds.has(entry.server.id)) {
-      const region = REGION_MAPPING[entry.server.region] || 'Other';
+      const region = getRegionFromCountry(entry.server.country);
       if (regionServerCount[region] < maxPerRegion) {
         selectedServers.push(entry);
         selectedIds.add(entry.server.id);
@@ -360,11 +431,42 @@ export async function runNetworkBenchmark(
   // Limit to maxServers
   const finalServers = selectedServers.slice(0, maxServers);
 
+  // Sort servers by region order for consistent display
+  // Within each region, sort by country then by latency
+  const sortedServers = [...finalServers].sort((a, b) => {
+    const regionA = getRegionFromCountry(a.server.country);
+    const regionB = getRegionFromCountry(b.server.country);
+    const orderA = regionOrder.indexOf(regionA);
+    const orderB = regionOrder.indexOf(regionB);
+    
+    // First by region order
+    if (orderA !== orderB) return orderA - orderB;
+    
+    // Then by country (group same country together)
+    if (a.server.country !== b.server.country) {
+      return a.server.country.localeCompare(b.server.country);
+    }
+    
+    // Finally by latency within same country
+    return a.latency - b.latency;
+  });
+
   // Test download/upload on selected servers
   let successCount = 0;
-  for (let i = 0; i < finalServers.length; i++) {
-    const { server, latency } = finalServers[i];
-    printProgress(`Testing ${server.sponsor || server.name} (${i + 1}/${finalServers.length})`);
+  let currentRegion = '';
+  
+  for (let i = 0; i < sortedServers.length; i++) {
+    const { server, latency } = sortedServers[i];
+    const geoRegion = getRegionFromCountry(server.country);
+    
+    // Print region header when region changes
+    if (geoRegion !== currentRegion) {
+      currentRegion = geoRegion;
+      const c = colors;
+      console.log(`  ${c.dim}── ${geoRegion} ${'─'.repeat(Math.max(0, 60 - geoRegion.length))}${c.reset}`);
+    }
+    
+    printProgress(`Testing ${server.sponsor || server.name} (${i + 1}/${sortedServers.length})`);
 
     // Download test
     const download = await testDownload(server);

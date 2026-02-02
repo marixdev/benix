@@ -26,6 +26,8 @@ export interface SystemInfo {
   uptime: string;
   loadAverage: string;
   virtualization: string;
+  ipv4: boolean;  // IPv4 connectivity
+  ipv6: boolean;  // IPv6 connectivity
 }
 
 function formatBytes(bytes: number): string {
@@ -34,6 +36,30 @@ function formatBytes(bytes: number): string {
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+// Check IPv4/IPv6 connectivity (similar to YABS)
+async function checkIPConnectivity(): Promise<{ ipv4: boolean; ipv6: boolean }> {
+  let ipv4 = false;
+  let ipv6 = false;
+
+  try {
+    // Check IPv4 connectivity
+    const ipv4Result = await exec('curl -4 -s --max-time 5 https://ipv4.icanhazip.com 2>/dev/null');
+    ipv4 = ipv4Result.trim().length > 0 && /^\d{1,3}(\.\d{1,3}){3}$/.test(ipv4Result.trim());
+  } catch {
+    ipv4 = false;
+  }
+
+  try {
+    // Check IPv6 connectivity
+    const ipv6Result = await exec('curl -6 -s --max-time 5 https://ipv6.icanhazip.com 2>/dev/null');
+    ipv6 = ipv6Result.trim().length > 0 && /^[0-9a-f:]+$/i.test(ipv6Result.trim());
+  } catch {
+    ipv6 = false;
+  }
+
+  return { ipv4, ipv6 };
 }
 
 async function getOsInfo(): Promise<{ os: string; kernel: string; hostname: string; arch: string }> {
@@ -276,7 +302,7 @@ async function getVirtualization(): Promise<string> {
 export async function collectSystemInfo(): Promise<SystemInfo> {
   printProgress('Collecting system information');
 
-  const [osInfo, cpuInfo, memoryInfo, swap, disk, uptime, loadAvg, virt] = await Promise.all([
+  const [osInfo, cpuInfo, memoryInfo, swap, disk, uptime, loadAvg, virt, ipConn] = await Promise.all([
     getOsInfo(),
     getCpuInfo(),
     getMemoryInfo(),
@@ -284,7 +310,8 @@ export async function collectSystemInfo(): Promise<SystemInfo> {
     getDiskInfo(),
     getUptime(),
     getLoadAverage(),
-    getVirtualization()
+    getVirtualization(),
+    checkIPConnectivity()
   ]);
 
   clearProgress();
@@ -300,7 +327,9 @@ export async function collectSystemInfo(): Promise<SystemInfo> {
     disk,
     uptime,
     loadAverage: loadAvg,
-    virtualization: virt
+    virtualization: virt,
+    ipv4: ipConn.ipv4,
+    ipv6: ipConn.ipv6
   };
 
   return result;
@@ -309,11 +338,16 @@ export async function collectSystemInfo(): Promise<SystemInfo> {
 export function printSystemInfo(info: SystemInfo): void {
   const c = colors;
   
+  // IPv4/IPv6 connectivity status (like YABS)
+  const ipv4Status = info.ipv4 ? `${c.green}✔ Online${c.reset}` : `${c.red}✘ Offline${c.reset}`;
+  const ipv6Status = info.ipv6 ? `${c.green}✔ Online${c.reset}` : `${c.red}✘ Offline${c.reset}`;
+  
   console.log(`  ${c.dim}OS${c.reset}              ${c.white}${info.os}${c.reset}`);
   console.log(`  ${c.dim}Hostname${c.reset}        ${c.white}${info.hostname}${c.reset}`);
   console.log(`  ${c.dim}Kernel${c.reset}          ${c.white}${info.kernel}${c.reset}`);
   console.log(`  ${c.dim}Architecture${c.reset}    ${c.white}${info.arch}${c.reset}`);
   console.log(`  ${c.dim}Virtualization${c.reset}  ${c.white}${info.virtualization}${c.reset}`);
+  console.log(`  ${c.dim}IPv4/IPv6${c.reset}       ${ipv4Status} / ${ipv6Status}`);
   console.log('');
   console.log(`  ${c.dim}CPU Model${c.reset}       ${c.white}${info.cpu.model}${c.reset}`);
   console.log(`  ${c.dim}CPU Cores${c.reset}       ${c.white}${info.cpu.cores}${c.reset}`);
